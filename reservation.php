@@ -1,5 +1,131 @@
 <?php
-// reservation.php - Page Réservation
+// Démarre la session et charge la connexion à la base de données
+session_start();
+require_once("config/conf_server.php");
+
+// Vérifie que l'utilisateur est connecté
+if (!isset($_SESSION["id"])) {
+    header("Location: index.php");
+    exit();
+}
+
+// Variables pour afficher les messages
+$message = "";
+$erreur = "";
+
+// Récupération des données du formulaire
+$date_repas = trim($_POST["date"] ?? '');
+$creneau = trim($_POST["creneau"] ?? '');
+$type_repas = trim($_POST["typeRepas"] ?? '');
+$mode = trim($_POST["mode"] ?? '');
+
+// Traite le formulaire après envoi
+if ($_SERVER["REQUEST_METHOD"] === "POST") {
+    // Récupère l'identifiant de l'utilisateur connecté
+    $id_utilisateur = $_SESSION["id"];
+
+    // Vérifie que tous les champs sont remplis
+    if (!empty($date_repas) && !empty($creneau) && !empty($type_repas) && !empty($mode)) {
+        try {
+            // Démarre une transaction
+            $conn->beginTransaction();
+
+            // Récupère le quota du créneau choisi
+            $sqlQuota = "SELECT quota_max
+                         FROM creneaux
+                         WHERE heure = :creneau
+                         LIMIT 1";
+            $stmtQuota = $conn->prepare($sqlQuota);
+            $stmtQuota->execute([
+                ':creneau' => $creneau
+            ]);
+            $quotaData = $stmtQuota->fetch(PDO::FETCH_ASSOC);
+
+            // Vérifie que le créneau existe
+            if (!$quotaData) {
+                throw new Exception("Créneau invalide.");
+            }
+
+            $quota_max = (int)$quotaData["quota_max"];
+
+            // Vérifie si l'utilisateur a déjà une réservation à cette date
+            $sqlDejaReserve = "SELECT COUNT(*)
+                               FROM reservations
+                               WHERE id_utilisateur = :id_utilisateur
+                               AND date_repas = :date_repas";
+            $stmtDejaReserve = $conn->prepare($sqlDejaReserve);
+            $stmtDejaReserve->execute([
+                ':id_utilisateur' => $id_utilisateur,
+                ':date_repas' => $date_repas
+            ]);
+
+            if ($stmtDejaReserve->fetchColumn() > 0) {
+                throw new Exception("Vous avez déjà une réservation pour cette date.");
+            }
+
+            // Compte les réservations déjà prises sur ce créneau
+            $sqlCount = "SELECT COUNT(*)
+                         FROM reservations
+                         WHERE date_repas = :date_repas
+                         AND creneau = :creneau
+                         AND statut IN ('validee', 'en_attente')";
+            $stmtCount = $conn->prepare($sqlCount);
+            $stmtCount->execute([
+                ':date_repas' => $date_repas,
+                ':creneau' => $creneau
+            ]);
+            $nombre_reservations = (int)$stmtCount->fetchColumn();
+
+            // Bloque la réservation si le quota est atteint
+            if ($nombre_reservations >= $quota_max) {
+                throw new Exception("Ce créneau est complet. Veuillez en choisir un autre.");
+            }
+
+            // Enregistre la réservation
+            $sqlReservation = "INSERT INTO reservations
+                (id_utilisateur, date_repas, creneau, type_repas, mode_consommation, statut, points_attribues, date_creation)
+                VALUES (:id_utilisateur, :date_repas, :creneau, :type_repas, :mode_consommation, 'validee', 10, NOW())";
+
+            $stmtReservation = $conn->prepare($sqlReservation);
+            $stmtReservation->execute([
+                ':id_utilisateur' => $id_utilisateur,
+                ':date_repas' => $date_repas,
+                ':creneau' => $creneau,
+                ':type_repas' => $type_repas,
+                ':mode_consommation' => $mode
+            ]);
+
+            // Ajoute 10 points de fidélité
+            $sqlPoints = "UPDATE utilisateurs
+                          SET points_fidelite = points_fidelite + 10
+                          WHERE id = :id_utilisateur";
+            $stmtPoints = $conn->prepare($sqlPoints);
+            $stmtPoints->execute([
+                ':id_utilisateur' => $id_utilisateur
+            ]);
+
+            // Valide la transaction
+            $conn->commit();
+            $message = "Réservation effectuée avec succès ! 10 points de fidélité ajoutés.";
+
+            // Réinitialise les champs du formulaire
+            $date_repas = '';
+            $creneau = '';
+            $type_repas = '';
+            $mode = '';
+
+        } catch (Exception $e) {
+            // Annule la transaction en cas d'erreur
+            if ($conn->inTransaction()) {
+                $conn->rollBack();
+            }
+            $erreur = "Erreur lors de la réservation : " . $e->getMessage();
+        }
+    } else {
+        // Message si un champ est vide
+        $erreur = "Veuillez remplir tous les champs.";
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="fr">
@@ -10,49 +136,55 @@
     <link rel="stylesheet" href="reservation.css">
 </head>
 <body>
-    <div class="dropdown">
-        <button class="dropdown-btn">Menu Principal ▼</button>
-        <div class="dropdown-content">
-            <a href="index.php">Accueil</a>
-            <div class="dropdown-item">
-                <a href="#Menu">Menu ➤</a>
-                <div class="submenu">
-                    <a href="hebdo.php">Hebdo</a>
-                </div>
-            </div>
-            <a href="reservation.php">Réservation</a>
-            <a href="cartefidelite.php">Carte Fidélité</a>
-            <a href="repasnoel.php">Repas De Noël</a>
-            <a href="#" onclick="deconnexion()">Déconnexion</a>
-        </div>
+    <!-- Bouton de retour vers l'accueil -->
+    <div class="button-container">
+        <button class="button-9" onclick="window.location.href='accueil.php'" role="button">Accueil</button>
     </div>
 
+    <!-- Conteneur principal -->
     <div class="container">
+        <!-- Titre de la page -->
         <h1>Réservation de Repas</h1>
-        
-        <form id="reservationForm">
+
+        <!-- Formulaire de réservation -->
+        <form method="POST" action="">
             <div class="form-group">
                 <label for="date">Date du repas :</label>
-                <input type="date" id="date" name="date" required>
+                <input
+                    type="date"
+                    id="date"
+                    name="date"
+                    value="<?php echo htmlspecialchars($date_repas); ?>"
+                    required
+                >
             </div>
 
             <div class="form-group">
                 <label for="creneau">Créneau horaire :</label>
-                <select id="creneau" name="creneau" required>
-                    <option value="">Sélectionnez un créneau</option>
-                    <option value="11h00">11h00</option>
-                    <option value="11h30">11h30</option>
-                    <option value="12h30">12h30</option>
+                <select
+                    id="creneau"
+                    name="creneau"
+                    required
+                    data-selected="<?php echo htmlspecialchars($creneau); ?>"
+                >
+                    <option value="">Sélectionnez d'abord une date</option>
                 </select>
+                <small id="creneau-info"></small>
             </div>
 
             <div class="form-group">
                 <label for="typeRepas">Type de repas :</label>
                 <select id="typeRepas" name="typeRepas" required>
                     <option value="">Sélectionnez un type</option>
-                    <option value="standard">Standard</option>
-                    <option value="vegetarien">Végétarien</option>
-                    <option value="sans-porc">Sans porc</option>
+                    <option value="standard" <?php echo ($type_repas === 'standard') ? 'selected' : ''; ?>>
+                        Standard
+                    </option>
+                    <option value="vegetarien" <?php echo ($type_repas === 'vegetarien') ? 'selected' : ''; ?>>
+                        Végétarien
+                    </option>
+                    <option value="sans-porc" <?php echo ($type_repas === 'sans-porc') ? 'selected' : ''; ?>>
+                        Sans porc
+                    </option>
                 </select>
             </div>
 
@@ -60,11 +192,25 @@
                 <label>Mode de consommation :</label>
                 <div class="radio-group">
                     <div class="radio-option">
-                        <input type="radio" id="sur-place" name="mode" value="sur-place" required>
+                        <input
+                            type="radio"
+                            id="sur-place"
+                            name="mode"
+                            value="sur-place"
+                            <?php echo ($mode === 'sur-place') ? 'checked' : ''; ?>
+                            required
+                        >
                         <label for="sur-place">Sur place</label>
                     </div>
+
                     <div class="radio-option">
-                        <input type="radio" id="emporter" name="mode" value="emporter">
+                        <input
+                            type="radio"
+                            id="emporter"
+                            name="mode"
+                            value="emporter"
+                            <?php echo ($mode === 'emporter') ? 'checked' : ''; ?>
+                        >
                         <label for="emporter">À emporter</label>
                     </div>
                 </div>
@@ -73,77 +219,22 @@
             <button type="submit" class="btn-submit">Réserver</button>
         </form>
 
-        <div id="successMessage" class="success-message">
-            Réservation effectuée avec succès !
-        </div>
+        <!-- Message de succès -->
+        <?php if (!empty($message)) : ?>
+            <div class="success-message show">
+                <?php echo htmlspecialchars($message); ?>
+            </div>
+        <?php endif; ?>
+
+        <!-- Message d'erreur -->
+        <?php if (!empty($erreur)) : ?>
+            <div class="success-message show" style="background-color:#f8d7da; color:#721c24;">
+                <?php echo htmlspecialchars($erreur); ?>
+            </div>
+        <?php endif; ?>
     </div>
 
-    <script>
-        // Vérifier si l'utilisateur est connecté
-        if (sessionStorage.getItem('loggedIn') !== 'true') {
-            window.location.href = 'login.html';
-        }
-
-        // Menu déroulant
-        const dropdownBtn = document.querySelector('.dropdown-btn');
-        const dropdown = document.querySelector('.dropdown');
-
-        dropdownBtn.addEventListener('click', function() {
-            dropdown.classList.toggle('active');
-        });
-
-        document.addEventListener('click', function(e) {
-            if (!dropdown.contains(e.target)) {
-                dropdown.classList.remove('active');
-            }
-        });
-
-        // Formulaire de réservation
-        const reservationForm = document.getElementById('reservationForm');
-        const successMessage = document.getElementById('successMessage');
-
-        // Définir la date minimale à aujourd'hui
-        const today = new Date().toISOString().split('T')[0];
-        document.getElementById('date').setAttribute('min', today);
-
-        reservationForm.addEventListener('submit', function(e) {
-            e.preventDefault();
-            
-            const formData = {
-                date: document.getElementById('date').value,
-                creneau: document.getElementById('creneau').value,
-                typeRepas: document.getElementById('typeRepas').value,
-                mode: document.querySelector('input[name="mode"]:checked').value
-            };
-
-            // Sauvegarder la réservation dans localStorage
-            let reservations = JSON.parse(localStorage.getItem('reservations') || '[]');
-            reservations.push({
-                ...formData,
-                id: Date.now(),
-                username: sessionStorage.getItem('username')
-            });
-            localStorage.setItem('reservations', JSON.stringify(reservations));
-
-            // Afficher le message de succès
-            successMessage.classList.add('show');
-            
-            // Réinitialiser le formulaire
-            reservationForm.reset();
-            
-            // Masquer le message après 3 secondes
-            setTimeout(() => {
-                successMessage.classList.remove('show');
-            }, 3000);
-        });
-
-        function deconnexion() {
-            sessionStorage.removeItem('loggedIn');
-            sessionStorage.removeItem('username');
-            sessionStorage.removeItem('role');
-            window.location.href = 'login.html';
-        }
-    </script>
+    <!-- Script qui charge les créneaux disponibles -->
+    <script src="reservation.js"></script>
 </body>
 </html>
-
