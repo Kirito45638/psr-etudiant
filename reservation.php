@@ -2,6 +2,8 @@
 // Démarre la session et charge la connexion à la base de données
 session_start();
 require_once("config/conf_server.php");
+require_once 'notifications/mail_helper.php';
+
 
 // Vérifie que l'utilisateur est connecté
 if (!isset($_SESSION["id"])) {
@@ -9,9 +11,11 @@ if (!isset($_SESSION["id"])) {
     exit();
 }
 
+
 // Variables pour afficher les messages
 $message = "";
 $erreur = "";
+
 
 // Récupération des données du formulaire
 $date_repas = trim($_POST["date"] ?? '');
@@ -19,16 +23,19 @@ $creneau = trim($_POST["creneau"] ?? '');
 $type_repas = trim($_POST["typeRepas"] ?? '');
 $mode = trim($_POST["mode"] ?? '');
 
+
 // Traite le formulaire après envoi
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
     // Récupère l'identifiant de l'utilisateur connecté
     $id_utilisateur = $_SESSION["id"];
+
 
     // Vérifie que tous les champs sont remplis
     if (!empty($date_repas) && !empty($creneau) && !empty($type_repas) && !empty($mode)) {
         try {
             // Démarre une transaction
             $conn->beginTransaction();
+
 
             // Récupère le quota du créneau choisi
             $sqlQuota = "SELECT quota_max
@@ -41,12 +48,15 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             ]);
             $quotaData = $stmtQuota->fetch(PDO::FETCH_ASSOC);
 
+
             // Vérifie que le créneau existe
             if (!$quotaData) {
                 throw new Exception("Créneau invalide.");
             }
 
+
             $quota_max = (int)$quotaData["quota_max"];
+
 
             // Vérifie si l'utilisateur a déjà une réservation à cette date
             $sqlDejaReserve = "SELECT COUNT(*)
@@ -59,9 +69,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 ':date_repas' => $date_repas
             ]);
 
+
             if ($stmtDejaReserve->fetchColumn() > 0) {
                 throw new Exception("Vous avez déjà une réservation pour cette date.");
             }
+
 
             // Compte les réservations déjà prises sur ce créneau
             $sqlCount = "SELECT COUNT(*)
@@ -76,10 +88,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             ]);
             $nombre_reservations = (int)$stmtCount->fetchColumn();
 
+
             // Bloque la réservation si le quota est atteint
             if ($nombre_reservations >= $quota_max) {
                 throw new Exception("Ce créneau est complet. Veuillez en choisir un autre.");
             }
+
 
             // Enregistre la réservation
             $sqlReservation = "INSERT INTO reservations
@@ -95,6 +109,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 ':mode_consommation' => $mode
             ]);
 
+
             // Ajoute 10 points de fidélité
             $sqlPoints = "UPDATE utilisateurs
                           SET points_fidelite = points_fidelite + 10
@@ -104,15 +119,60 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 ':id_utilisateur' => $id_utilisateur
             ]);
 
+
             // Valide la transaction
             $conn->commit();
+
+
+            // Envoi de l'email de confirmation + enregistrement dans notifications
+            $sqlUser = "SELECT id, nom, prenom, email
+                        FROM utilisateurs
+                        WHERE id = :id
+                        LIMIT 1";
+            $stmtUser = $conn->prepare($sqlUser);
+            $stmtUser->execute([
+                ':id' => $id_utilisateur
+            ]);
+            $utilisateur = $stmtUser->fetch(PDO::FETCH_ASSOC);
+
+            $reservationData = [
+                'daterepas' => $date_repas,
+                'creneau' => $creneau,
+                'typerepas' => $type_repas,
+                'modeconsommation' => $mode
+            ];
+
+            if ($utilisateur && !empty($utilisateur['email'])) {
+                $mailData = construireMessageConfirmationReservation($reservationData, $utilisateur);
+
+                $emailEnvoye = envoyerEmailNotification(
+                    $utilisateur['email'],
+                    $mailData['sujet'],
+                    $mailData['html'],
+                    $mailData['texte']
+                );
+
+                enregistrerNotification(
+                    $conn,
+                    (int)$utilisateur['id'],
+                    'confirmation',
+                    'email',
+                    $mailData['sujet'],
+                    $mailData['texte'],
+                    $emailEnvoye ? 'envoye' : 'echec'
+                );
+            }
+
+
             $message = "Réservation effectuée avec succès ! 10 points de fidélité ajoutés.";
+
 
             // Réinitialise les champs du formulaire
             $date_repas = '';
             $creneau = '';
             $type_repas = '';
             $mode = '';
+
 
         } catch (Exception $e) {
             // Annule la transaction en cas d'erreur
@@ -141,10 +201,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         <button class="button-9" onclick="window.location.href='accueil.php'" role="button">Accueil</button>
     </div>
 
+
     <!-- Conteneur principal -->
     <div class="container">
         <!-- Titre de la page -->
         <h1>Réservation de Repas</h1>
+
 
         <!-- Formulaire de réservation -->
         <form method="POST" action="">
@@ -159,6 +221,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 >
             </div>
 
+
             <div class="form-group">
                 <label for="creneau">Créneau horaire :</label>
                 <select
@@ -171,6 +234,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 </select>
                 <small id="creneau-info"></small>
             </div>
+
 
             <div class="form-group">
                 <label for="typeRepas">Type de repas :</label>
@@ -188,6 +252,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 </select>
             </div>
 
+
             <div class="form-group">
                 <label>Mode de consommation :</label>
                 <div class="radio-group">
@@ -203,6 +268,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                         <label for="sur-place">Sur place</label>
                     </div>
 
+
                     <div class="radio-option">
                         <input
                             type="radio"
@@ -216,8 +282,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 </div>
             </div>
 
+
             <button type="submit" class="btn-submit">Réserver</button>
         </form>
+
 
         <!-- Message de succès -->
         <?php if (!empty($message)) : ?>
@@ -226,6 +294,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             </div>
         <?php endif; ?>
 
+
         <!-- Message d'erreur -->
         <?php if (!empty($erreur)) : ?>
             <div class="success-message show" style="background-color:#f8d7da; color:#721c24;">
@@ -233,6 +302,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             </div>
         <?php endif; ?>
     </div>
+
 
     <!-- Script qui charge les créneaux disponibles -->
     <script src="reservation.js"></script>
