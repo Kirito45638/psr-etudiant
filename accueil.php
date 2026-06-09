@@ -67,6 +67,18 @@ $points_fidelite = $utilisateur ? (int)$utilisateur["points_fidelite"] : 0;
             <button class="button-9" onclick="window.location.href='admin/gestion_comptes.php'" role="button">
                 Gestion des comptes
             </button>
+
+            <button class="button-9" onclick="window.location.href='admin/planning_presence.php'" role="button">
+                Planning de présence
+            </button>
+
+            <button class="button-9" onclick="window.location.href='admin/dashboard.php'" role="button">
+                Dashboard
+            </button>
+
+            <button class="button-9" onclick="window.location.href='notifications/notifications.php'" role="button">
+                Notifications
+            </button>
             <!--<button class="button-9 button-danger" onclick="window.location.href='admin/reset_password.php'" role="button">
                 Réinitialiser mot de passe
             </button>-->
