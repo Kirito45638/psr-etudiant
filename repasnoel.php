@@ -164,7 +164,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     <div class="container">
         <!-- Titre de la page -->
         <h1>🎄 Repas de Noël 🎄</h1>
-        <p class="subtitle">Menu spécial à 8 €</p>
 
         <!-- Bloc d'information sur les points fidélité -->
         <div class="priority-notice">
@@ -198,7 +197,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 </div>
             </div>
 
-            <div class="price"><?php echo htmlspecialchars($menuNoel['prix']); ?> €</div>
         <?php else : ?>
             <div class="menu-card">
                 <p>Aucun menu de Noël n'est disponible pour le moment.</p>
